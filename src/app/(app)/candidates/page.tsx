@@ -1,9 +1,11 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { CandidateFormDialog } from "@/components/candidate-form-dialog";
+import { CategoryStrip } from "@/components/category/category-strip";
 import {
   CandidateRow,
   type DeleteTarget,
@@ -35,10 +37,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableHeader } from "@/components/ui/table";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { refreshCategories, useCategoryExists } from "@/hooks/use-categories";
 import { useDebounced } from "@/hooks/use-debounced";
 import { ApiError, apiFetch } from "@/lib/api";
+import { UNCATEGORIZED } from "@/lib/category";
 import { useSkillCatalog } from "@/lib/skills";
 import {
   STAGE_LABELS,
@@ -71,6 +76,37 @@ function normalizeItem(c: CandidateListItem): CandidateListItem {
 }
 
 export default function CandidatesPage() {
+  // useSearchParams (bộ lọc category nằm trong URL) cần Suspense boundary.
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <CandidatesView />
+    </Suspense>
+  );
+}
+
+function PageFallback() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-9 w-40" />
+      <div className="flex gap-2">
+        <Skeleton className="h-14 w-48 rounded-xl" />
+        <Skeleton className="h-14 w-48 rounded-xl" />
+      </div>
+      <Skeleton className="h-64 w-full" />
+    </div>
+  );
+}
+
+function CandidatesView() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const categoryParam = searchParams.get("category");
+  // Category đã bị xóa (URL cũ/chia sẻ) thì coi như không lọc.
+  const categoryExists = useCategoryExists(
+    categoryParam && categoryParam !== UNCATEGORIZED ? categoryParam : null,
+  );
+  const categoryFilter = categoryExists ? categoryParam : null;
+
   const [search, setSearch] = useState("");
   const [skill, setSkill] = useState("");
   const [status, setStatus] = useState("ALL");
@@ -98,6 +134,7 @@ export default function CandidatesPage() {
     ...(status !== "ALL" && { status }),
     ...(debouncedSearch && { search: debouncedSearch }),
     ...(debouncedSkill && { skill: debouncedSkill }),
+    ...(categoryFilter && { categoryId: categoryFilter }),
   }).toString();
   const requestKey = `${queryString}#${reloadKey}`;
 
@@ -162,6 +199,40 @@ export default function CandidatesPage() {
     });
   }, []);
 
+  /** Chọn/bỏ category lọc: lưu vào URL (không thêm lịch sử) và về trang 1. */
+  const selectCategory = useCallback(
+    (value: string | null) => {
+      const params = new URLSearchParams(window.location.search);
+      if (value) params.set("category", value);
+      else params.delete("category");
+      const qs = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        qs ? `${pathname}?${qs}` : pathname,
+      );
+      setPage(1);
+    },
+    [pathname],
+  );
+
+  /** Category bị xóa: bỏ lọc nếu đang xem nó; ứng viên có thể đã được chuyển nên tải lại. */
+  const categoryDeleted = useCallback(
+    (id: string) => {
+      if (new URLSearchParams(window.location.search).get("category") === id) {
+        selectCategory(null);
+      }
+      reload();
+    },
+    [selectCategory, reload],
+  );
+
+  /** Đổi category của một dòng: làm mới số đếm; đang lọc thì dòng phải rời khỏi bảng. */
+  const categoryChanged = useCallback(() => {
+    void refreshCategories();
+    if (categoryFilter) reload();
+  }, [categoryFilter, reload]);
+
   const requestDelete = useCallback((target: DeleteTarget) => {
     setDeleteTarget(target);
     setDeleteOpen(true);
@@ -184,6 +255,7 @@ export default function CandidatesPage() {
     try {
       await apiFetch<void>(`/candidates/${id}`, { method: "DELETE" });
       toast.success(`Đã xóa ${fullName}`);
+      void refreshCategories();
       if (data && data.items.length <= 1 && page > 1) {
         // Trang cuối vừa hết dòng: lùi một trang (việc đổi trang sẽ tải lại).
         setPage(page - 1);
@@ -205,6 +277,7 @@ export default function CandidatesPage() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         toast.error(`${fullName} không còn tồn tại (có thể đã bị xóa).`);
+        void refreshCategories();
         reload();
       } else {
         toast.error(errorText(err, "Không thể xóa ứng viên."));
@@ -249,6 +322,13 @@ export default function CandidatesPage() {
           Thêm ứng viên
         </Button>
       </div>
+
+      <CategoryStrip
+        selected={categoryFilter}
+        onSelect={selectCategory}
+        onChanged={reload}
+        onDeleted={categoryDeleted}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-52 flex-1 sm:max-w-xs">
@@ -309,7 +389,7 @@ export default function CandidatesPage() {
 
       <p className="text-xs text-muted-foreground">
         Nhấp đúp vào ô để sửa (hoặc chọn ô rồi nhấn Enter / F2). Enter = lưu ·
-        Esc = hủy. Trạng thái đổi trực tiếp ở danh sách chọn.
+        Esc = hủy. Trạng thái và Category đổi trực tiếp ở danh sách chọn.
       </p>
 
       {error ? (
@@ -342,6 +422,7 @@ export default function CandidatesPage() {
                     onPatch={patchItem}
                     onStale={reload}
                     onRequestDelete={requestDelete}
+                    onCategoryChanged={categoryChanged}
                   />
                 ))}
               </TableBody>
@@ -351,6 +432,7 @@ export default function CandidatesPage() {
           {data && data.items.length === 0 && (
             <EmptyState
               filtered={hasFilter}
+              inCategory={categoryFilter !== null}
               onClear={clearFilters}
               onCreate={() => setFormOpen(true)}
             />
@@ -410,6 +492,11 @@ export default function CandidatesPage() {
       <CandidateFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
+        defaultCategoryId={
+          categoryFilter && categoryFilter !== UNCATEGORIZED
+            ? categoryFilter
+            : null
+        }
         onSaved={reload}
       />
 

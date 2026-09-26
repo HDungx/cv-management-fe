@@ -1,8 +1,17 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { FolderPlus, Loader2 } from "lucide-react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
+import { CategoryPicker } from "@/components/category/category-select";
 import {
   CurrencyField,
   SalaryField,
@@ -15,8 +24,19 @@ import { SkillsField } from "@/components/skills-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  createCategory,
+  refreshCategories,
+  useCategories,
+} from "@/hooks/use-categories";
 import { useDuplicateSearch } from "@/hooks/use-duplicates";
 import { ApiError, apiFetch } from "@/lib/api";
+import {
+  categoryErrorMessage,
+  findCategoryByName,
+  readLastCategoryId,
+  rememberCategoryId,
+} from "@/lib/category";
 import {
   emptyFormValues,
   joinSkills,
@@ -35,7 +55,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 /** Các trường có kết quả từ máy trích. */
-type ExtractedKey = keyof ExtractedCv;
+type ExtractedKey = Exclude<keyof ExtractedCv, "categoryHint">;
 
 type Tone = "high" | "medium" | "low" | "none";
 
@@ -248,6 +268,132 @@ function mergeErrorMessage(err: unknown): string {
   return "Không thể gộp hồ sơ.";
 }
 
+interface ReviewCategory {
+  /** Category đang chọn (do HR chọn, hoặc tự chọn theo gợi ý/lần dùng gần nhất). */
+  categoryId: string | null;
+  /** Vì sao được chọn sẵn (null = HR tự chọn hoặc chưa chọn). */
+  auto: "hint" | "last" | null;
+  /** Tên category gợi ý từ CV (nếu có). */
+  hint: string | null;
+  /** Có gợi ý nhưng chưa có category nào trùng tên: đề xuất tạo mới. */
+  suggestCreate: boolean;
+  pick: (id: string) => void;
+}
+
+/**
+ * Category cho ứng viên mới. Ưu tiên: HR đã chọn > category trùng tên với gợi ý
+ * của CV (không phân biệt hoa thường/dấu) > category dùng gần nhất (nếu CV không
+ * có gợi ý). Là giá trị suy ra (không dùng effect) nên không bao giờ ghi đè lựa
+ * chọn của HR.
+ */
+function useReviewCategory(hintValue: string | null): ReviewCategory {
+  const { items, loaded } = useCategories();
+  const [picked, setPicked] = useState<string | null>(null);
+  const [lastId] = useState(() => readLastCategoryId());
+  const hint = hintValue?.trim() ? hintValue.trim() : null;
+
+  return useMemo(() => {
+    const exists = (id: string | null) =>
+      id !== null && items.some((c) => c.id === id);
+    if (exists(picked)) {
+      return {
+        categoryId: picked,
+        auto: null,
+        hint,
+        suggestCreate: false,
+        pick: setPicked,
+      };
+    }
+    const byHint = hint ? findCategoryByName(items, hint) : undefined;
+    if (byHint) {
+      return {
+        categoryId: byHint.id,
+        auto: "hint",
+        hint,
+        suggestCreate: false,
+        pick: setPicked,
+      };
+    }
+    if (!hint && exists(lastId)) {
+      return {
+        categoryId: lastId,
+        auto: "last",
+        hint,
+        suggestCreate: false,
+        pick: setPicked,
+      };
+    }
+    return {
+      categoryId: null,
+      auto: null,
+      hint,
+      suggestCreate: loaded && !!hint,
+      pick: setPicked,
+    };
+  }, [items, loaded, picked, hint, lastId]);
+}
+
+/** Ghi chú dưới ô category: đã tự chọn theo gợi ý, hoặc đề xuất tạo category. */
+function CategoryHint({
+  cat,
+  onPick,
+}: {
+  cat: ReviewCategory;
+  onPick: (id: string) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const { hint } = cat;
+
+  const createFromHint = useCallback(async () => {
+    if (!hint) return;
+    setCreating(true);
+    try {
+      const created = await createCategory({ name: hint });
+      onPick(created.id);
+      toast.success(`Đã tạo category «${created.name}»`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Category cùng tên đã có (tạo ở nơi khác): tải lại rồi chọn nó.
+        await refreshCategories();
+      } else {
+        toast.error(categoryErrorMessage(err));
+      }
+    } finally {
+      setCreating(false);
+    }
+  }, [hint, onPick]);
+
+  if (cat.auto === "hint") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Đã chọn theo gợi ý từ CV («{hint}»). Bạn có thể đổi.
+      </p>
+    );
+  }
+  if (cat.auto === "last") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Đang dùng category gần nhất bạn đã chọn. Bạn có thể đổi.
+      </p>
+    );
+  }
+  if (cat.suggestCreate && hint && !cat.categoryId) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={creating}
+        onClick={() => void createFromHint()}
+      >
+        {creating ? <Loader2 className="animate-spin" /> : <FolderPlus />}
+        Gợi ý: tạo category «{hint}»
+      </Button>
+    );
+  }
+  return null;
+}
+
 export function CvReviewForm({
   cvFileId,
   extracted,
@@ -266,6 +412,8 @@ export function CvReviewForm({
   const [edited, setEdited] = useState<Partial<Record<ExtractedKey, true>>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cat = useReviewCategory(extracted?.categoryHint?.value ?? null);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
   // Các trường có kết quả máy trích, chốt một lần lúc mở form.
   const [extractedKeys] = useState(
     () => new Set<string>(Object.keys(extracted ?? {})),
@@ -321,15 +469,25 @@ export function CvReviewForm({
     [cvFileId],
   );
 
+  const { pick: pickCategory } = cat;
+  const onCategoryChange = useCallback(
+    (id: string) => {
+      pickCategory(id);
+      setCategoryError(null);
+    },
+    [pickCategory],
+  );
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const problem = validateCandidateValues(values);
-    if (problem) {
-      setError(problem);
-      return;
-    }
+    const categoryId = cat.categoryId;
+    setError(problem);
+    setCategoryError(categoryId ? null : "Vui lòng chọn category.");
+    if (problem || !categoryId) return;
     const body: CandidateCreateInput = {
       ...toCandidateInput(values),
+      categoryId,
       cvFileId,
     };
 
@@ -341,8 +499,14 @@ export function CvReviewForm({
         body: JSON.stringify(body),
       });
       toast.success("Đã thêm ứng viên");
+      rememberCategoryId(categoryId);
+      void refreshCategories();
       onSaved(saved);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        // Có thể category vừa bị xóa: tải lại danh sách để chọn lại nếu cần.
+        void refreshCategories();
+      }
       setError(err instanceof ApiError ? err.message : "Không thể lưu.");
       setSubmitting(false);
     }
@@ -368,6 +532,15 @@ export function CvReviewForm({
       <ReviewDuplicates matches={matches} onMerge={mergeInto} />
 
       <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2 sm:col-span-2">
+          <CategoryPicker
+            id={id("category")}
+            value={cat.categoryId}
+            onChange={onCategoryChange}
+            error={categoryError}
+          />
+          <CategoryHint cat={cat} onPick={onCategoryChange} />
+        </div>
         {field("fullName", "Họ và tên", {
           required: true,
           className: "sm:col-span-2",

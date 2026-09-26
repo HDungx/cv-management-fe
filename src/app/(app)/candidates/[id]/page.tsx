@@ -3,9 +3,11 @@
 import { ArrowLeft, ArrowRight, Loader2, Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CandidateFormDialog } from "@/components/candidate-form-dialog";
+import { CategoryBadge } from "@/components/category/category-parts";
+import { CategorySelect } from "@/components/category/category-select";
 import { CvFilesCard } from "@/components/cv-files-card";
 import { DuplicatesBanner } from "@/components/duplicates-banner";
 import { GroupedSkills } from "@/components/grouped-skills";
@@ -25,7 +27,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { refreshCategories, toCategoryRef } from "@/hooks/use-categories";
 import { ApiError, apiFetch } from "@/lib/api";
+import { categoryErrorMessage } from "@/lib/category";
 import {
   formatDate,
   formatDateTime,
@@ -33,7 +37,13 @@ import {
   formatUrl,
 } from "@/lib/format";
 import { changeStage, stageErrorMessage } from "@/lib/stage";
-import { STAGE_LABELS, type CandidateDetail, type Stage } from "@/lib/types";
+import {
+  STAGE_LABELS,
+  type Candidate,
+  type CandidateDetail,
+  type Category,
+  type Stage,
+} from "@/lib/types";
 
 interface Result {
   key: string;
@@ -50,6 +60,7 @@ export default function CandidateDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [changingStage, setChangingStage] = useState(false);
+  const [changingCategory, setChangingCategory] = useState(false);
 
   const requestKey = `${id}#${reloadKey}`;
 
@@ -101,11 +112,49 @@ export default function CandidateDetailPage() {
     }
   }
 
+  const onChangeCategory = useCallback(
+    async (categoryId: string, picked: Category | undefined) => {
+      setChangingCategory(true);
+      try {
+        const updated = await apiFetch<Candidate>(`/candidates/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ categoryId }),
+        });
+        setResult((r) =>
+          r?.data
+            ? {
+                ...r,
+                data: {
+                  ...r.data,
+                  categoryId: updated.categoryId,
+                  category:
+                    updated.category ?? (picked ? toCategoryRef(picked) : null),
+                  updatedAt: updated.updatedAt,
+                },
+              }
+            : r,
+        );
+        toast.success(`Đã chuyển vào category «${picked?.name ?? "mới"}»`);
+        void refreshCategories();
+      } catch (err) {
+        toast.error(categoryErrorMessage(err));
+        if (err instanceof ApiError && err.status === 404) {
+          void refreshCategories();
+        }
+        setReloadKey((k) => k + 1);
+      } finally {
+        setChangingCategory(false);
+      }
+    },
+    [id],
+  );
+
   async function onDelete() {
     setDeleting(true);
     try {
       await apiFetch<void>(`/candidates/${id}`, { method: "DELETE" });
       toast.success("Đã xóa ứng viên");
+      void refreshCategories();
       router.replace("/candidates");
     } catch (err) {
       setDeleting(false);
@@ -183,6 +232,19 @@ export default function CandidateDetailPage() {
               onChange={(s) => void onChangeStage(s)}
             />
             <span>{candidate.appliedRole ?? "Chưa có vị trí ứng tuyển"}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <CategoryBadge category={candidate.category} />
+            <CategorySelect
+              value={candidate.categoryId}
+              busy={changingCategory}
+              allowCreate
+              size="sm"
+              placeholder="Chưa phân loại"
+              ariaLabel="Đổi category"
+              className="w-44"
+              onChange={(cid, picked) => void onChangeCategory(cid, picked)}
+            />
           </div>
         </div>
         <div className="flex gap-2">

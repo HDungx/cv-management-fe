@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CategoryPicker } from "@/components/category/category-select";
 import { DuplicateWarning } from "@/components/duplicate-warning";
 import {
   CurrencyField,
@@ -22,20 +23,24 @@ import {
 } from "@/components/form-fields";
 import { SkillsField } from "@/components/skills-field";
 import { Label } from "@/components/ui/label";
+import { refreshCategories } from "@/hooks/use-categories";
 import { ApiError, apiFetch } from "@/lib/api";
+import { rememberCategoryId } from "@/lib/category";
 import {
   candidateToFormValues,
   emptyFormValues,
   toCandidateInput,
   validateCandidateValues,
 } from "@/lib/candidate-form";
-import type { Candidate } from "@/lib/types";
+import type { Candidate, CandidateInput } from "@/lib/types";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Có giá trị = chế độ sửa, không có = thêm mới. */
   candidate?: Candidate;
+  /** Chế độ thêm mới: category chọn sẵn (vd: đang xem một category ở danh sách). */
+  defaultCategoryId?: string | null;
   onSaved: (candidate: Candidate) => void;
 }
 
@@ -43,6 +48,7 @@ export function CandidateFormDialog({
   open,
   onOpenChange,
   candidate,
+  defaultCategoryId,
   onSaved,
 }: Props) {
   return (
@@ -55,11 +61,12 @@ export function CandidateFormDialog({
           <DialogDescription>
             {candidate
               ? "Chỉnh sửa rồi bấm Lưu."
-              : "Chỉ cần họ tên, các trường còn lại có thể bổ sung sau."}
+              : "Cần họ tên và category, các trường còn lại có thể bổ sung sau."}
           </DialogDescription>
         </DialogHeader>
         <CandidateForm
           candidate={candidate}
+          defaultCategoryId={defaultCategoryId ?? null}
           onCancel={() => onOpenChange(false)}
           onSaved={(saved) => {
             onSaved(saved);
@@ -73,10 +80,12 @@ export function CandidateFormDialog({
 
 function CandidateForm({
   candidate,
+  defaultCategoryId,
   onCancel,
   onSaved,
 }: {
   candidate?: Candidate;
+  defaultCategoryId: string | null;
   onCancel: () => void;
   onSaved: (candidate: Candidate) => void;
 }) {
@@ -91,6 +100,10 @@ function CandidateForm({
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [categoryId, setCategoryId] = useState<string | null>(
+    candidate ? candidate.categoryId : defaultCategoryId,
+  );
+  const [categoryError, setCategoryError] = useState<string | null>(null);
 
   const setField = useCallback<FieldChange>((name, value) => {
     setValues((prev) => ({ ...prev, [name]: value }));
@@ -100,14 +113,24 @@ function CandidateForm({
     [setField],
   );
 
+  const onCategoryChange = useCallback((id: string) => {
+    setCategoryId(id);
+    setCategoryError(null);
+  }, []);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Thêm mới: bắt buộc có category. Sửa: ứng viên cũ chưa có thì không bắt buộc.
+    const missingCategory = !candidate && !categoryId;
+    setCategoryError(missingCategory ? "Vui lòng chọn category." : null);
     const problem = validateCandidateValues(values);
-    if (problem) {
-      setError(problem);
-      return;
+    setError(problem);
+    if (problem || missingCategory) return;
+
+    const body: CandidateInput = toCandidateInput(values);
+    if (categoryId && categoryId !== candidate?.categoryId) {
+      body.categoryId = categoryId;
     }
-    const body = toCandidateInput(values);
 
     setError(null);
     setSubmitting(true);
@@ -122,9 +145,20 @@ function CandidateForm({
             body: JSON.stringify(body),
           });
       toast.success(candidate ? "Đã lưu thay đổi" : "Đã thêm ứng viên");
+      if (categoryId) rememberCategoryId(categoryId);
+      // Thêm ứng viên / đổi category làm đổi số đếm ở dải thư mục.
+      void refreshCategories();
       onSaved(saved);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Không thể lưu.");
+      if (err instanceof ApiError && err.status === 404 && body.categoryId) {
+        // Category vừa bị xóa ở nơi khác: bắt chọn lại.
+        void refreshCategories();
+        setCategoryId(null);
+        setCategoryError("Category này không còn tồn tại, hãy chọn lại.");
+        setError(null);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Không thể lưu.");
+      }
       setSubmitting(false);
     }
   }
@@ -165,6 +199,14 @@ function CandidateForm({
             excludeId={candidate?.id}
           />
         </div>
+        <CategoryPicker
+          id={id("category")}
+          value={categoryId}
+          onChange={onCategoryChange}
+          error={categoryError}
+          required={!candidate}
+          className="sm:col-span-2"
+        />
         <TextField
           id={id("role")}
           name="appliedRole"

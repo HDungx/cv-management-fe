@@ -16,39 +16,40 @@ import { STAGE_LABELS, STAGES, type Stage } from "@/lib/types";
 import { BarList, type BarItem } from "./bar-list";
 import { BlockSkeleton, ChartCard, EmptyBlock } from "./chart-card";
 import { formatDecimal, formatInt, formatPercent } from "./stats-utils";
-import { categoryColor } from "./viz-theme";
+import { PieBreakdown, type PieInput } from "./pie-breakdown";
+import { categoryColor, sliceColor, stageColor } from "./viz-theme";
 
-const MAX_SOURCES = 8;
+const MAX_SOURCE_SLICES = 6;
 
 /* ---------------------------------- Funnel --------------------------------- */
 
 export function FunnelCard({ data }: { data?: StatsResponse }) {
-  const { items, total } = useMemo(() => {
-    if (!data) return { items: [] as BarItem[], total: 0 };
-    const sum = data.funnel.reduce((s, f) => s + f.count, 0);
-    return {
-      total: sum,
-      items: data.funnel.map<BarItem>((f) => ({
-        key: f.stage,
-        label: STAGE_LABELS[f.stage],
-        value: f.count,
-        valueLabel: formatInt(f.count),
-        sublabel: `${formatPercent(f.count, sum)} tổng`,
-      })),
-    };
+  const items = useMemo<PieInput[] | null>(() => {
+    if (!data) return null;
+    return data.funnel.map((f) => ({
+      key: f.stage,
+      label: STAGE_LABELS[f.stage],
+      value: f.count,
+      color: stageColor(f.stage),
+    }));
   }, [data]);
+  const total = data?.funnel.reduce((s, f) => s + f.count, 0) ?? 0;
 
   return (
     <ChartCard
       title="Phễu theo trạng thái"
-      description="Số ứng viên ở từng trạng thái hiện tại."
+      description="Trạng thái hiện tại của các ứng viên nhận trong khoảng đã chọn."
     >
-      {!data ? (
+      {!items ? (
         <BlockSkeleton rows={7} />
       ) : total === 0 ? (
-        <EmptyBlock message="Chưa có ứng viên nào." />
+        <EmptyBlock message="Chưa có ứng viên nào trong khoảng đã chọn." />
       ) : (
-        <BarList items={items} ariaLabel="Số ứng viên theo trạng thái" />
+        <PieBreakdown
+          items={items}
+          ariaLabel="Ứng viên theo trạng thái"
+          dimensionLabel="Trạng thái"
+        />
       )}
     </ChartCard>
   );
@@ -57,37 +58,48 @@ export function FunnelCard({ data }: { data?: StatsResponse }) {
 /* ---------------------------------- Source --------------------------------- */
 
 export function SourceCard({ data }: { data?: StatsResponse }) {
-  const items = useMemo<BarItem[]>(() => {
+  const items = useMemo<PieInput[]>(() => {
     if (!data) return [];
-    const rows = data.bySource.map<BarItem>((s, i) => ({
-      key: `${s.source ?? "__null"}-${i}`,
-      label: s.source ?? "Không rõ",
-      value: s.count,
-      valueLabel: formatInt(s.count),
+    const rows = data.bySource
+      .filter((s) => s.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .map((s, i) => ({
+        key: `${s.source ?? "__null"}-${i}`,
+        label: s.source ?? "Không rõ",
+        value: s.count,
+      }));
+    const head = rows.slice(0, MAX_SOURCE_SLICES).map((r, i) => ({
+      ...r,
+      color: sliceColor(i),
     }));
-    if (rows.length <= MAX_SOURCES) return rows;
-    const rest = rows.slice(MAX_SOURCES - 1);
-    const restTotal = rest.reduce((s, r) => s + r.value, 0);
+    if (rows.length <= MAX_SOURCE_SLICES) return head;
+    const rest = rows.slice(MAX_SOURCE_SLICES);
     return [
-      ...rows.slice(0, MAX_SOURCES - 1),
+      ...head,
       {
         key: "__other",
-        label: "Nguồn khác",
-        value: restTotal,
-        valueLabel: formatInt(restTotal),
-        sublabel: `${rest.length} nguồn`,
+        label: `Nguồn khác (${rest.length})`,
+        value: rest.reduce((sum, r) => sum + r.value, 0),
+        color: "var(--viz-other)",
       },
     ];
   }, [data]);
 
   return (
-    <ChartCard title="Theo nguồn" description="Số ứng viên theo nguồn CV.">
+    <ChartCard
+      title="Theo nguồn"
+      description="Nguồn CV của các ứng viên nhận trong khoảng đã chọn."
+    >
       {!data ? (
         <BlockSkeleton rows={4} />
       ) : items.length === 0 ? (
         <EmptyBlock message="Chưa có dữ liệu về nguồn CV." />
       ) : (
-        <BarList items={items} ariaLabel="Số ứng viên theo nguồn" />
+        <PieBreakdown
+          items={items}
+          ariaLabel="Ứng viên theo nguồn"
+          dimensionLabel="Nguồn"
+        />
       )}
     </ChartCard>
   );
@@ -142,7 +154,7 @@ export function RoleCard({ data }: { data?: StatsResponse }) {
   return (
     <ChartCard
       title="Theo vị trí ứng tuyển"
-      description="Top vị trí và lương kỳ vọng trung bình, tính riêng từng đơn vị tiền (chỉ trên hồ sơ có nhập lương)."
+      description="Top vị trí của ứng viên nhận trong khoảng đã chọn và lương kỳ vọng trung bình, tính riêng từng đơn vị tiền (chỉ trên hồ sơ có nhập lương)."
       className="lg:col-span-2"
     >
       {!data ? (
@@ -217,7 +229,7 @@ export function DurationCard({ data }: { data?: StatsResponse }) {
   return (
     <ChartCard
       title="Thời gian trung bình mỗi vòng"
-      description="Số ngày ứng viên ở lại một trạng thái trước khi chuyển đi."
+      description="Số ngày ứng viên (nhận trong khoảng đã chọn) ở lại một trạng thái trước khi chuyển đi."
     >
       {!data ? (
         <BlockSkeleton rows={7} />
@@ -386,7 +398,7 @@ export function SkillsCard({ data }: { data?: StatsResponse }) {
   return (
     <ChartCard
       title="Kỹ năng"
-      description="Top kỹ năng (số ứng viên có kỹ năng đó) và tổng theo nhóm; màu thanh theo nhóm."
+      description="Kỹ năng của ứng viên nhận trong khoảng đã chọn: top kỹ năng (số ứng viên có kỹ năng đó) và tổng theo nhóm; màu thanh theo nhóm."
       className="lg:col-span-2"
     >
       {!data ? (

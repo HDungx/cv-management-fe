@@ -1,8 +1,9 @@
 "use client";
 
-import { FileUp, RefreshCw } from "lucide-react";
+import { FileUp, RefreshCw, RotateCcw } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ChartCard } from "@/components/stats/chart-card";
 import { ReceivedCard } from "@/components/stats/received-card";
 import {
@@ -13,54 +14,74 @@ import {
   SourceCard,
   TransitionCard,
 } from "@/components/stats/stats-sections";
-import { formatInt, formatPercent } from "@/components/stats/stats-utils";
+import {
+  filterToQuery,
+  isFilterEmpty,
+  parseFilter,
+  type StatsFilter,
+} from "@/components/stats/stats-filter";
+import { StatsFilters } from "@/components/stats/stats-filters";
+import {
+  formatInt,
+  formatPercent,
+  todayLocalIso,
+} from "@/components/stats/stats-utils";
 import { VizStyles } from "@/components/stats/viz-theme";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, apiFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import type { Granularity, StatsResponse } from "@/lib/stats-types";
+import type { StatsResponse } from "@/lib/stats-types";
 import { cn } from "@/lib/utils";
-
-const PERIOD_OPTIONS: Record<Granularity, number[]> = {
-  week: [8, 12, 26],
-  month: [6, 12],
-};
-const DEFAULT_PERIODS = 12;
-const UNIT: Record<Granularity, string> = { week: "tuần", month: "tháng" };
-
-interface Loaded {
-  data: StatsResponse;
-  /** Granularity của dữ liệu đã tải (có thể khác lựa chọn hiện tại khi đang tải lại). */
-  granularity: Granularity;
-}
 
 interface Result {
   key: string;
-  loaded?: Loaded;
+  data?: StatsResponse;
   error?: ApiError;
 }
 
 export default function DashboardPage() {
-  const [granularity, setGranularity] = useState<Granularity>("month");
-  const [periods, setPeriods] = useState(DEFAULT_PERIODS);
+  // useSearchParams cần Suspense để phần còn lại của trang vẫn prerender được.
+  return (
+    <Suspense fallback={<DashboardFallback />}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardFallback() {
+  return (
+    <div className="viz-root space-y-4">
+      <h1 className="text-xl font-semibold">Thống kê</h1>
+      <KpiRow />
+    </div>
+  );
+}
+
+function DashboardContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const filter = useMemo(() => parseFilter(searchParams), [searchParams]);
+  const query = filterToQuery(filter);
+  const [today] = useState(() => todayLocalIso());
+
   const [reloadKey, setReloadKey] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
-  const [last, setLast] = useState<Loaded | null>(null);
+  const [last, setLast] = useState<StatsResponse | null>(null);
 
-  const requestKey = `${granularity}:${periods}#${reloadKey}`;
+  const requestKey = `${query}#${reloadKey}`;
 
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch<StatsResponse>(
-      `/stats?granularity=${granularity}&periods=${periods}`,
-      { signal: controller.signal },
-    )
+    apiFetch<StatsResponse>(query ? `/stats?${query}` : "/stats", {
+      signal: controller.signal,
+    })
       .then((data) => {
-        const loaded = { data, granularity };
-        setLast(loaded);
-        setResult({ key: requestKey, loaded });
+        if (controller.signal.aborted) return;
+        setLast(data);
+        setResult({ key: requestKey, data });
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -73,44 +94,49 @@ export default function DashboardPage() {
         });
       });
     return () => controller.abort();
-  }, [granularity, periods, requestKey]);
+  }, [query, requestKey]);
 
   const settled = result?.key === requestKey;
   const error = settled ? result.error : undefined;
+  // 400 = bộ lọc không hợp lệ: báo tại bộ lọc, giữ nguyên số liệu của lần trước.
+  const filterError = error?.status === 400 ? error.message : undefined;
+  const fatal = error && !filterError ? error : undefined;
   // Đang tải lại: giữ nguyên bản vẽ cũ (mờ đi) thay vì nháy skeleton.
-  const shown = settled ? result.loaded : last;
-  const data = shown?.data;
+  const data = settled && result.data ? result.data : (last ?? undefined);
   const refetching = !settled && last !== null;
 
-  function chooseGranularity(next: Granularity) {
-    if (next === granularity) return;
-    setGranularity(next);
-    setPeriods(DEFAULT_PERIODS);
-  }
+  const applyFilter = useCallback(
+    (next: StatsFilter) => {
+      const qs = filterToQuery(next);
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [router, pathname],
+  );
 
   return (
     <div className="viz-root space-y-4">
       <VizStyles />
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Thống kê</h1>
-          <p className="text-sm text-muted-foreground">
-            {data
-              ? `Cập nhật lúc ${formatDateTime(data.generatedAt)}`
-              : "Đang tải..."}
-          </p>
-        </div>
-        <PeriodControls
-          granularity={granularity}
-          periods={periods}
-          onGranularity={chooseGranularity}
-          onPeriods={setPeriods}
-        />
+      <div>
+        <h1 className="text-xl font-semibold">Thống kê</h1>
+        <p className="text-sm text-muted-foreground">
+          {data
+            ? `Cập nhật lúc ${formatDateTime(data.generatedAt)}`
+            : "Đang tải..."}
+        </p>
       </div>
 
-      {error ? (
-        <ErrorState error={error} onRetry={() => setReloadKey((k) => k + 1)} />
-      ) : (
+      <StatsFilters
+        key={`${filter.from ?? ""}|${filter.to ?? ""}`}
+        filter={filter}
+        today={today}
+        range={data?.range}
+        serverError={filterError}
+        onChange={applyFilter}
+      />
+
+      {fatal ? (
+        <ErrorState error={fatal} onRetry={() => setReloadKey((k) => k + 1)} />
+      ) : filterError && !data ? null : (
         <div
           aria-busy={!data || refetching}
           className={cn(
@@ -120,13 +146,17 @@ export default function DashboardPage() {
         >
           <KpiRow data={data} />
           {data && data.totals.candidates === 0 ? (
-            <EmptyDashboard />
+            <EmptyDashboard
+              onReset={
+                isFilterEmpty(filter) ? undefined : () => applyFilter({})
+              }
+            />
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
               <FunnelCard data={data} />
               <ReceivedCard
                 data={data?.received}
-                granularity={shown?.granularity ?? granularity}
+                granularity={data?.range.granularity ?? "month"}
               />
               <SourceCard data={data} />
               <DurationCard data={data} />
@@ -137,59 +167,6 @@ export default function DashboardPage() {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/* --------------------------------- Controls -------------------------------- */
-
-function PeriodControls({
-  granularity,
-  periods,
-  onGranularity,
-  onPeriods,
-}: {
-  granularity: Granularity;
-  periods: number;
-  onGranularity: (g: Granularity) => void;
-  onPeriods: (n: number) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      <div
-        role="group"
-        aria-label="Đơn vị kỳ"
-        className="flex items-center gap-1"
-      >
-        {(["week", "month"] as const).map((g) => (
-          <Button
-            key={g}
-            size="sm"
-            variant={granularity === g ? "secondary" : "ghost"}
-            aria-pressed={granularity === g}
-            onClick={() => onGranularity(g)}
-          >
-            {g === "week" ? "Theo tuần" : "Theo tháng"}
-          </Button>
-        ))}
-      </div>
-      <div
-        role="group"
-        aria-label={`Số ${UNIT[granularity]} gần nhất`}
-        className="flex items-center gap-1"
-      >
-        {PERIOD_OPTIONS[granularity].map((n) => (
-          <Button
-            key={n}
-            size="sm"
-            variant={periods === n ? "secondary" : "ghost"}
-            aria-pressed={periods === n}
-            onClick={() => onPeriods(n)}
-          >
-            {n} {UNIT[granularity]}
-          </Button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -224,15 +201,23 @@ function KpiRow({ data }: { data?: StatsResponse }) {
   const t = data?.totals;
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <KpiTile label="Tổng ứng viên" value={t && formatInt(t.candidates)} />
+      <KpiTile
+        label="Ứng viên nhận trong khoảng đã chọn"
+        value={t && formatInt(t.candidates)}
+        hint="Tính theo ngày tạo hồ sơ"
+      />
       <KpiTile
         label="Đang xử lý"
         value={t && formatInt(t.active)}
-        hint="Chưa có kết quả cuối"
+        hint="Trong nhóm đã nhận, chưa có kết quả cuối"
       />
-      <KpiTile label="Đã nhận" value={t && formatInt(t.hired)} />
       <KpiTile
-        label="Tỷ lệ nhận / tổng"
+        label="Đã tuyển"
+        value={t && formatInt(t.hired)}
+        hint="Trạng thái hiện tại là Đã nhận"
+      />
+      <KpiTile
+        label="Tỷ lệ tuyển / ứng viên nhận"
         value={t && formatPercent(t.hired, t.candidates)}
         hint={
           t && `${formatInt(t.hired)} / ${formatInt(t.candidates)} ứng viên`
@@ -244,14 +229,21 @@ function KpiRow({ data }: { data?: StatsResponse }) {
 
 /* ---------------------------------- States --------------------------------- */
 
-function EmptyDashboard() {
+function EmptyDashboard({ onReset }: { onReset?: () => void }) {
   return (
-    <ChartCard title="Chưa có dữ liệu để thống kê">
+    <ChartCard title="Không có dữ liệu trong khoảng đã chọn">
       <div className="flex flex-col items-center gap-3 py-6 text-center">
         <p className="max-w-md text-sm text-muted-foreground">
-          Hãy import CV hoặc thêm ứng viên, các biểu đồ sẽ xuất hiện ở đây.
+          Chưa có ứng viên nào được tạo trong khoảng này. Hãy mở rộng khoảng
+          ngày, hoặc import CV / thêm ứng viên để các biểu đồ xuất hiện ở đây.
         </p>
         <div className="flex flex-wrap justify-center gap-2">
+          {onReset && (
+            <Button variant="outline" onClick={onReset}>
+              <RotateCcw />
+              Đặt lại mặc định
+            </Button>
+          )}
           <Link href="/import" className={buttonVariants()}>
             <FileUp />
             Import CV

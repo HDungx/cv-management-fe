@@ -22,7 +22,12 @@ import {
 } from "@/components/ui/table";
 import type { Granularity, StatsResponse } from "@/lib/stats-types";
 import { SERIES_COLOR } from "./viz-theme";
-import { formatInt, periodLongLabel, periodShortLabel } from "./stats-utils";
+import {
+  formatInt,
+  GRANULARITY_UNIT,
+  periodLongLabel,
+  periodShortLabel,
+} from "./stats-utils";
 
 interface Point {
   label: string;
@@ -85,7 +90,9 @@ export default function ReceivedChart({
     return { total, peak };
   }, [points]);
 
-  const unit = granularity === "week" ? "tuần" : "tháng";
+  const unit = GRANULARITY_UNIT[granularity];
+  // Nhiều cột (tối đa ~366): bỏ khoảng hở và bo góc để cột không thành sợi chỉ.
+  const dense = points.length > 60;
 
   return (
     <div className="space-y-3">
@@ -131,7 +138,11 @@ export default function ReceivedChart({
       {view === "chart" ? (
         <div className="h-60 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={points} margin={MARGIN} barCategoryGap="20%">
+            <BarChart
+              data={points}
+              margin={MARGIN}
+              barCategoryGap={dense ? "8%" : "20%"}
+            >
               <CartesianGrid vertical={false} stroke="var(--border)" />
               <XAxis
                 dataKey="label"
@@ -139,7 +150,7 @@ export default function ReceivedChart({
                 tickLine={false}
                 axisLine={AXIS_LINE}
                 interval="preserveStartEnd"
-                minTickGap={14}
+                minTickGap={28}
               />
               <YAxis
                 allowDecimals={false}
@@ -154,7 +165,7 @@ export default function ReceivedChart({
                 name="CV nhận"
                 fill={SERIES_COLOR}
                 maxBarSize={24}
-                radius={[4, 4, 0, 0]}
+                radius={dense ? 0 : [4, 4, 0, 0]}
                 isAnimationActive={false}
               />
             </BarChart>

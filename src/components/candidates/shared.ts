@@ -5,11 +5,12 @@ export type ColumnKey =
   | "appliedRole"
   | "email"
   | "phone"
+  | "status"
+  | "category"
   | "skills"
   | "links"
   | "salary"
   | "source"
-  | "status"
   | "notes"
   | "createdAt"
   | "updatedAt";
@@ -26,11 +27,12 @@ export const COLUMNS: readonly ColumnDef[] = [
   { key: "appliedRole", label: "Vị trí ứng tuyển" },
   { key: "email", label: "Email" },
   { key: "phone", label: "SĐT" },
+  { key: "status", label: "Trạng thái", sort: "status" },
+  { key: "category", label: "Category" },
   { key: "skills", label: "Kỹ năng" },
   { key: "links", label: "LinkedIn / GitHub" },
   { key: "salary", label: "Lương kỳ vọng" },
   { key: "source", label: "Nguồn" },
-  { key: "status", label: "Trạng thái", sort: "status" },
   { key: "notes", label: "Ghi chú" },
   { key: "createdAt", label: "Ngày tạo", sort: "createdAt" },
   { key: "updatedAt", label: "Cập nhật", sort: "updatedAt" },

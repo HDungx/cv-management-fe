@@ -4,17 +4,20 @@ import { ExternalLink } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { isStaleError, type RowCallbacks } from "./shared";
+import { CategorySelect } from "@/components/category/category-select";
 import { StageSelect } from "@/components/stage-select";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ApiError } from "@/lib/api";
+import { refreshCategories, toCategoryRef } from "@/hooks/use-categories";
+import { ApiError, apiFetch } from "@/lib/api";
+import { categoryErrorMessage } from "@/lib/category";
 import { formatUrl } from "@/lib/format";
 import { groupSkills, type SkillCatalog } from "@/lib/skills";
 import { changeStage, stageErrorMessage } from "@/lib/stage";
-import type { Stage } from "@/lib/types";
+import type { Candidate, Category, CategoryRef, Stage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const MAX_SKILLS_SHOWN = 3;
@@ -175,6 +178,75 @@ export const StageCell = memo(function StageCell({
       busy={busy}
       onChange={(s) => void change(s)}
       className="w-32"
+    />
+  );
+});
+
+/**
+ * Category sửa trực tiếp như Trạng thái: chọn là PATCH ngay, cập nhật lạc quan
+ * và hoàn tác khi lỗi. Thành công thì làm mới số đếm ở dải thư mục
+ * (`onCategoryChanged` còn tải lại bảng nếu đang lọc theo category).
+ */
+export const CategoryCell = memo(function CategoryCell({
+  id,
+  fullName,
+  category,
+  onPatch,
+  onStale,
+  onCategoryChanged,
+}: RowCallbacks & {
+  id: string;
+  fullName: string;
+  category: CategoryRef | null;
+  onCategoryChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const change = useCallback(
+    async (categoryId: string, picked: Category | undefined) => {
+      const previous = category;
+      setBusy(true);
+      if (picked) {
+        onPatch(id, () => ({ categoryId, category: toCategoryRef(picked) }));
+      }
+      try {
+        const updated = await apiFetch<Candidate>(`/candidates/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ categoryId }),
+        });
+        onPatch(id, () => ({
+          categoryId: updated.categoryId,
+          category: updated.category,
+          updatedAt: updated.updatedAt,
+        }));
+        onCategoryChanged();
+      } catch (err) {
+        onPatch(id, () => ({
+          categoryId: previous?.id ?? null,
+          category: previous,
+        }));
+        toast.error(`${fullName}: ${categoryErrorMessage(err)}`);
+        if (err instanceof ApiError && err.status === 404) {
+          void refreshCategories();
+          onStale();
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [id, fullName, category, onPatch, onStale, onCategoryChanged],
+  );
+
+  return (
+    <CategorySelect
+      value={category?.id ?? null}
+      busy={busy}
+      tinted
+      size="sm"
+      placeholder="Chưa phân loại"
+      ariaLabel={`Đổi category của ${fullName}`}
+      className="w-36 min-w-0"
+      onChange={(cid, picked) => void change(cid, picked)}
     />
   );
 });

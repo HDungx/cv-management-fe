@@ -158,11 +158,12 @@ const SKELETON_WIDTH: Record<ColumnKey, string> = {
   appliedRole: "w-32",
   email: "w-40",
   phone: "w-24",
+  status: "w-28",
+  category: "w-28",
   skills: "w-40",
   links: "w-24",
   salary: "w-36",
   source: "w-20",
-  status: "w-28",
   notes: "w-52",
   createdAt: "w-20",
   updatedAt: "w-20",
@@ -246,10 +247,13 @@ export const ColumnChooser = memo(function ColumnChooser({
 
 export function EmptyState({
   filtered,
+  inCategory = false,
   onClear,
   onCreate,
 }: {
   filtered: boolean;
+  /** Đang xem một category (thư mục) cụ thể mà chưa có ứng viên nào. */
+  inCategory?: boolean;
   onClear: () => void;
   onCreate: () => void;
 }) {
@@ -258,12 +262,18 @@ export function EmptyState({
       <UserX className="size-8 text-muted-foreground" />
       <div>
         <p className="font-medium">
-          {filtered ? "Không có ứng viên phù hợp" : "Chưa có ứng viên nào"}
+          {filtered
+            ? "Không có ứng viên phù hợp"
+            : inCategory
+              ? "Category này chưa có ứng viên"
+              : "Chưa có ứng viên nào"}
         </p>
         <p className="text-sm text-muted-foreground">
           {filtered
             ? "Thử đổi từ khóa hoặc bỏ bớt bộ lọc."
-            : "Bắt đầu bằng cách thêm ứng viên đầu tiên."}
+            : inCategory
+              ? "Thêm ứng viên mới vào category này, hoặc đổi category của ứng viên có sẵn."
+              : "Bắt đầu bằng cách thêm ứng viên đầu tiên."}
         </p>
       </div>
       {filtered ? (

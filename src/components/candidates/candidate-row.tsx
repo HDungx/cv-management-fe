@@ -3,7 +3,7 @@
 import { Eye, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { memo } from "react";
-import { StageCell } from "./cells";
+import { CategoryCell, StageCell } from "./cells";
 import {
   LinksFieldCell,
   NameCell,
@@ -39,6 +39,8 @@ interface RowProps extends RowCallbacks {
   /** Số cột "Ghi chú i" đang hiện trên bảng (tính từ các dòng của trang). */
   noteCols: number;
   onRequestDelete: (target: DeleteTarget) => void;
+  /** Đổi category của dòng xong: làm mới số đếm thư mục (và bảng nếu đang lọc). */
+  onCategoryChanged: () => void;
 }
 
 /**
@@ -53,6 +55,7 @@ export const CandidateRow = memo(function CandidateRow({
   onPatch,
   onStale,
   onRequestDelete,
+  onCategoryChanged,
 }: RowProps) {
   const show = (key: ColumnKey) => visible.has(key);
   const cb = { onPatch, onStale };
@@ -87,6 +90,27 @@ export const CandidateRow = memo(function CandidateRow({
           value={c.phone}
           {...cb}
         />
+      )}
+      {show("status") && (
+        <TableCell>
+          <StageCell
+            id={c.id}
+            fullName={c.fullName}
+            status={c.status}
+            {...cb}
+          />
+        </TableCell>
+      )}
+      {show("category") && (
+        <TableCell>
+          <CategoryCell
+            id={c.id}
+            fullName={c.fullName}
+            category={c.category}
+            onCategoryChanged={onCategoryChanged}
+            {...cb}
+          />
+        </TableCell>
       )}
       {show("skills") && (
         <SkillsFieldCell
@@ -124,16 +148,6 @@ export const CandidateRow = memo(function CandidateRow({
           value={c.source}
           {...cb}
         />
-      )}
-      {show("status") && (
-        <TableCell>
-          <StageCell
-            id={c.id}
-            fullName={c.fullName}
-            status={c.status}
-            {...cb}
-          />
-        </TableCell>
       )}
       {show("notes") && (
         <>
